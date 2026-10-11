@@ -1,0 +1,30 @@
+# Hub-and-spoke Syncthing layout, applied over SSH from any machine:
+#   syncthing-hubspoke.py inspect config.toml   # see what would change
+#   syncthing-hubspoke.py apply config.toml     # make it so
+#
+# ssh     how to reach the machine; use the account that runs Syncthing there.
+#         Use ssh = "local" for the machine you run the tool on.
+# path    each folder lives at path/<folder name> unless `paths` overrides it.
+# folders folder names. The Syncthing folder ID is the lowercase name
+#         (WorkNotes -> worknotes); it ties the folder together across machines.
+# id      optional device ID; only needed so others can pair with a machine
+#         that is offline when you run `apply`.
+
+# The hub holds every folder that any client uses.
+[hub]
+name = "synchub"
+ssh = "alice@hub.example"
+path = "/srv/sync"
+folders = ["Archive", "Documents", "Photos", "WorkNotes", "WritingNotes"]
+
+# Each client gets only the folders it lists. Clients never pair with each other.
+[clients.macbook]
+ssh = "local"
+path = "~/Sync"
+folders = ["Documents", "Photos", "WritingNotes"]
+paths = { Photos = "~/Pictures/Synced" }
+
+[clients.laptop]
+ssh = "alice@laptop.example"
+path = "/srv/sync"
+folders = ["Archive", "Documents", "WorkNotes"]
