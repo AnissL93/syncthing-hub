@@ -295,6 +295,8 @@ syncthing cli config folders photos dump-json
 syncthing cli config folders photos path get
 ```
 
+**Config looks right but a folder doesn't sync.** `inspect` also reads each folder's runtime state through the REST API and reports stopped folders as `ERROR`. The most common cause is `folder marker missing`: the hidden `.stfolder` directory is gone, usually because the data was copied without it. Syncthing stops the folder instead of risking pushing deletions. If the files are all there, recreate the marker with `mkdir PATH/.stfolder`; if they aren't, find out where they went first.
+
 **Two folder IDs on one directory.** `inspect` reports these as `EXTRA` with the command to remove the one that doesn't match the config. Removing a folder's configuration never deletes its files.
 
 **`syncthing: command not found` over SSH.** The tool already adds `/opt/homebrew/bin` and `/usr/local/bin` to `PATH` on remote machines. For other locations, link the program into one of those directories.

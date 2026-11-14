@@ -156,6 +156,28 @@ def test_duplicate_id_on_same_directory():
     assert findings == [("EXTRA", findings[0][1], [ST + ["folders", "Documents", "delete"]])]
 
 
+def test_runtime_problems_are_reported():
+    s = state(LAP, folders=[("documents", "Documents", "/home/me/Sync/Documents", [HUB], {})],
+              devices=[(LAP, "laptop", {}), (HUB, "synchub", {})])
+    s["folder_status"] = {"documents": {"state": "error", "pullErrors": 0,
+                                        "error": "folder marker missing (this indicates potential data loss)"}}
+    findings = tool.plan(s, cfg(), "laptop", IDS, "/home/me")[1]
+    assert findings == [("ERROR", findings[0][1], [["mkdir", "/home/me/Sync/Documents/.stfolder"]])]
+    assert "Documents has stopped syncing" in findings[0][1]
+
+    s["folder_status"] = {"documents": {"state": "idle", "pullErrors": 3, "error": ""}}
+    assert tags(tool.plan(s, cfg(), "laptop", IDS, "/home/me")[1]) == ["ERROR"]
+
+    s["folder_status"] = None  # REST API unreachable
+    assert tags(tool.plan(s, cfg(), "laptop", IDS, "/home/me")[1]) == ["WARN"]
+
+
+def test_paused_folder_is_reported():
+    s = state(LAP, folders=[("documents", "Documents", "/home/me/Sync/Documents", [HUB], {"paused": True})],
+              devices=[(LAP, "laptop", {}), (HUB, "synchub", {})])
+    assert tags(tool.plan(s, cfg(), "laptop", IDS, "/home/me")[1]) == ["WARN"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

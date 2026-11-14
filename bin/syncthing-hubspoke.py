@@ -19,6 +19,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     import tomllib
@@ -188,13 +189,31 @@ class Machine:
     def load_state(self) -> dict:
         st = lambda *args: json.loads(self.check(["syncthing", "cli", *args]))
         self.home = str(Path.home()) if self.ssh == "local" else self.check(["printenv", "HOME"]).strip()
+        config = st("config", "dump-json")
         return {
             "self_id": self.check(["syncthing", "device-id"]).strip(),
-            "config": st("config", "dump-json"),
+            "config": config,
+            "folder_status": self.load_status(config),
             "connections": st("show", "connections").get("connections") or {},
             "pending_devices": st("show", "pending", "devices") or {},
             "pending_folders": st("show", "pending", "folders") or {},
         }
+
+    def load_status(self, config: dict) -> dict | None:
+        """Each folder's runtime state from the REST API (`syncthing cli` has no command for it)."""
+        gui = config.get("gui") or {}
+        host, _, port = (gui.get("address") or "").rpartition(":")
+        if not gui.get("apiKey") or not port.isdigit():
+            return None
+        if host in ("", "0.0.0.0", "[::]"):
+            host = "127.0.0.1"
+        url = "%s://%s:%s/rest/db/status?folder=" % ("https" if gui.get("useTLS") else "http", host, port)
+        try:
+            return {f["id"]: json.loads(self.check(["curl", "-skf", "--max-time", "10", "-H",
+                                                    "X-API-Key: " + gui["apiKey"], url + quote(f["id"])]))
+                    for f in config["folders"]}
+        except (MachineError, ValueError):
+            return None
 
 
 # ---------------------------------------------------------------- planning
@@ -340,6 +359,25 @@ def plan(state: dict, cfg: dict | None = None, me: str | None = None, ids: dict 
             add("INFO", "Folder '%s' is offered by %s and not accepted."
                 % (fid, ", ".join(name(d) for d in (info.get("offeredBy") or {}))))
 
+    # The config can be right while a folder has stopped syncing.
+    status = state.get("folder_status", {})
+    if status is None:
+        add("WARN", "Could not read folder status from the Syncthing REST API; runtime problems are not checked.")
+    for f in current:
+        label = f.get("label") or f["id"]
+        if f.get("paused"):
+            add("WARN", "Folder %s is paused." % label, ST + ["folders", f["id"], "paused", "set", "false"])
+            continue
+        s = (status or {}).get(f["id"]) or {}
+        if s.get("state") == "error":
+            msg, cmds = "Folder %s has stopped syncing: %s." % (label, s.get("error")), []
+            if "marker missing" in (s.get("error") or ""):
+                msg += " If its files are all there, recreate the marker; if not, find out where they went first."
+                cmds = [["mkdir", "%s/%s" % (where(f), f.get("markerName") or ".stfolder")]]
+            add("ERROR", msg, *cmds)
+        elif s.get("pullErrors"):
+            add("ERROR", "Folder %s: %d files failed to sync; the web UI shows why." % (label, s["pullErrors"]))
+
     return role, findings
 
 
@@ -377,7 +415,10 @@ def report(state: dict, role: str, findings: list, managed: dict) -> None:
         mid = match_folder(f, managed)
         tag = "managed" if mid == f["id"] else ("-> %s" % mid if mid else "unmanaged")
         print("  %-14s %-14s %-12s %s" % (f["id"], f.get("label", ""), f.get("type", ""), f["path"]))
-        print("  %-14s shared with: %s  [%s]" % ("", ", ".join(shared) or "(nobody)", tag))
+        s = (state.get("folder_status") or {}).get(f["id"]) or {}
+        need = " (%d left)" % s["needTotalItems"] if s.get("needTotalItems") else ""
+        print("  %-14s shared with: %s  [%s]  %s%s" % ("", ", ".join(shared) or "(nobody)", tag,
+                                                       s.get("state", ""), need))
     if not state["config"]["folders"]:
         print("  (none)")
 
@@ -473,7 +514,7 @@ def main(argv: list) -> int:
         except MachineError as e:
             print("ERROR: %s" % e, file=sys.stderr)
             return 1
-        role, findings = plan(state)
+        role, findings = plan(state, home=machine.home)
         report(state, "unknown (pass a config file to compare against it)", findings,
                {folder_id(f): f for f in DEFAULT_FOLDERS})
         return 0
